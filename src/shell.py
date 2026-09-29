@@ -3,6 +3,8 @@ import getpass
 import socket
 
 from cmd_parser import parse
+from config import Config
+from script import ScriptError, read_script
 
 
 def _get_user():
@@ -15,7 +17,8 @@ def _get_user():
 class Shell:
     """Выполняет введённые команды и хранит состояние сессии."""
 
-    def __init__(self):
+    def __init__(self,config=None):
+        self.config=config or Config()
         self.user = _get_user()
         self.host = socket.gethostname()
         self.running = True
@@ -32,6 +35,29 @@ class Shell:
     def prompt(self):
         """Приглашение к вводу, как в UNIX-оболочке."""
         return f"{self.user}@{self.host}:~$ "
+    def startup_output(self):
+        """Строки для вывода при запуске: отладка параметров и скрипт."""
+        lines = self.config.debug_lines()
+        if self.config.script_path:
+            lines += self.run_script(self.config.script_path)
+        return lines
+
+    def run_script(self, path):
+        """Выполняет скрипт и возвращает диалог: ввод и вывод строк."""
+        try:
+            commands = read_script(path)
+        except ScriptError as err:
+            return [f"script: {err}"]
+        dialog = []
+        for command in commands:
+            dialog.append(self.prompt() + command)
+            result = self.execute(command)
+            if result:
+                dialog.append(result)
+            if not self.running:
+                break
+        return dialog
+
 
     def execute(self, line):
         """Выполняет строку и возвращает текст вывода (может быть пустым)."""

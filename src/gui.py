@@ -33,6 +33,8 @@ class App:
         self.entry.pack(side="left", fill="x", expand=True)
         self.entry.bind("<Return>", self.on_enter)
         self.entry.focus_set()
+        for line in shell.startup_output():
+            self.print(line)
 
     def print(self, text):
         """Добавляет строку в область вывода."""
