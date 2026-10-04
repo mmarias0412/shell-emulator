@@ -50,7 +50,9 @@ class VfsNode:
 def _split_path(path):
     """Возвращает сегменты пути без пустых элементов."""
     return [part for part in path.strip("/").split("/") if part]
-
+def path_str(segments):
+    """Отображаемый путь каталога: '/' для корня, иначе '/a/b'."""
+    return "/" + "/".join(segments) if segments else "/"
 
 class Vfs:
     """Дерево VFS в памяти с загрузкой из CSV и сохранением обратно."""
@@ -151,6 +153,30 @@ class Vfs:
             yield path, child
             if child.is_dir:
                 yield from cls._walk(child, path)
+
+    def resolve(self, cwd, path):
+        """Разбирает путь (абсолютный или относительный) от cwd.
+
+        Поддерживает '.', '..' и составные пути вида 'a/b/c'.
+        Возвращает (новые_сегменты, узел); бросает VfsError, если
+        такого пути нет.
+        """
+        segments = [] if path.startswith("/") else list(cwd)
+        for part in _split_path(path):
+            if part == ".":
+                continue
+            if part == "..":
+                if segments:
+                    segments.pop()
+                continue
+            segments.append(part)
+        node = self.root
+        for part in segments:
+            if not node.is_dir or part not in node.children:
+                raise VfsError(f"нет такого файла или каталога: '{path}'")
+            node = node.children[part]
+        return segments, node
+
 
     def save(self, path):
         """Сохраняет текущее (только в памяти изменённое) состояние

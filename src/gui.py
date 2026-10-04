@@ -2,6 +2,8 @@
 import tkinter as tk
 from tkinter import scrolledtext
 
+from shell import CLEAR_SENTINEL
+
 BG = "#1e1e1e"
 FG = "#d4d4d4"
 FONT = ("Courier New", 11)
@@ -37,13 +39,19 @@ class App:
             self.print(line)
 
     def print(self, text):
-        """Добавляет строку в область вывода."""
+        """Добавляет строку в область вывода (или очищает её по запросу)."""
+        if text == CLEAR_SENTINEL:
+            self.output.configure(state="normal")
+            self.output.delete("1.0", "end")
+            self.output.configure(state="disabled")
+            return
         self.output.configure(state="normal")
         self.output.insert("end", text + "\n")
         self.output.see("end")
         self.output.configure(state="disabled")
 
     def on_enter(self, _event):
+        """Обрабатывает нажатие Enter в строке ввода."""
         line = self.entry.get()
         self.entry.delete(0, "end")
         self.print(self.shell.prompt() + line)
@@ -52,3 +60,4 @@ class App:
             self.print(result)
         if not self.shell.running:
             self.root.destroy()
+

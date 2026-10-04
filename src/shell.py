@@ -5,8 +5,11 @@ import socket
 from cmd_parser import parse
 from config import Config
 from script import ScriptError, read_script
-from vfs import Vfs, VfsError
+from vfs import Vfs, VfsError, path_str
 
+CLEAR_SENTINEL = "\x00CLEAR\x00"
+MAX_PATH_ARGS = 1
+CHOWN_ARGS = 2
 
 def _get_user():
     try:
@@ -25,12 +28,17 @@ class Shell:
         self.running = True
         self.vfs_error=None
         self.vfs=self._load_vfs()
+        self.cwd=[]
+        self.history=[]
         self.commands = {
-            "ls": self._stub,
-            "cd": self._stub,
+            "ls": self._ls,
+            "cd": self._cd,
             "exit": self._exit,
             "vfs-info": self._vfs_info,
             "vfs-save": self._vfs_save,
+            "clear": self._clear,
+            "echo": self._echo,
+            "history": self._history,
         }
     def _load_vfs(self):
         """Загружает VFS по пути из конфигурации, иначе — VFS по умолчанию."""
@@ -47,8 +55,8 @@ class Shell:
         return f"Эмулятор - [{self.user}@{self.host}]"
 
     def prompt(self):
-        """Приглашение к вводу, как в UNIX-оболочке."""
-        return f"{self.user}@{self.host}:~$ "
+        """Приглашение к вводу: пользователь, хост и текущий каталог VFS."""
+        return f"{self.user}@{self.host}:{path_str(self.cwd)}$ "
     def startup_output(self):
         """Строки для вывода при запуске: отладка, статус VFS, скрипт."""
         lines = self.config.debug_lines()
@@ -81,14 +89,12 @@ class Shell:
         name, args = parse(line)
         if name is None:
             return ""
+        self.history.append(line)
         handler = self.commands.get(name)
         if handler is None:
             return f"{name}: command not found"
         return handler(name, args)
 
-    def _stub(self, name, args):
-        """Заглушка: печатает имя команды и её аргументы."""
-        return f"{name}: аргументы: {args}"
 
     def _exit(self, name, args):
         self.running = False
@@ -99,11 +105,65 @@ class Shell:
 
     def _vfs_save(self, name, args):
         """Сохраняет текущее состояние VFS на диск в исходном формате."""
-        if len(args) != 1:
+        if len(args) != MAX_PATH_ARGS:
             return "vfs-save: требуется один аргумент - путь"
         try:
             self.vfs.save(args[0])
         except VfsError as err:
             return f"vfs-save: {err}"
         return f"vfs-save: сохранено в '{args[0]}'"
+    def _ls(self, name, args):
+        """Выводит содержимое каталога (текущего или указанного)."""
+        if len(args) > MAX_PATH_ARGS:
+            return f"{name}: слишком много аргументов"
+        path = args[0] if args else "."
+        try:
+            _, node = self.vfs.resolve(self.cwd, path)
+        except VfsError as err:
+            return f"{name}: {err}"
+        if not node.is_dir:
+            return node.name
+        entries = sorted(node.children)
+        names = [
+            child_name + ("/" if node.children[child_name].is_dir else "")
+            for child_name in entries
+        ]
+        return "  ".join(names)
+
+    def _cd(self, name, args):
+        """Переходит в указанный каталог (или домашний, если нет аргумента)."""
+        if len(args) > MAX_PATH_ARGS:
+            return f"{name}: слишком много аргументов"
+        if not args:
+            path = "/home" if "home" in self.vfs.root.children else "/"
+        else:
+            path = args[0]
+        try:
+            segments, node = self.vfs.resolve(self.cwd, path)
+        except VfsError as err:
+            return f"{name}: {err}"
+        if not node.is_dir:
+            return f"{name}: не каталог: '{path}'"
+        self.cwd = segments
+        return ""
+
+    def _clear(self, name, args):
+        """Запрашивает очистку окна вывода у GUI."""
+        return CLEAR_SENTINEL
+
+    def _echo(self, name, args):
+        """Выводит переданные аргументы, разделённые пробелом."""
+        return " ".join(args)
+
+    def _history(self, name, args):
+        """Выводит список всех выполненных ранее команд с номерами."""
+        if not self.history:
+            return ""
+        width = len(str(len(self.history)))
+        lines = [
+            f"{i:>{width}}  {cmd}"
+            for i, cmd in enumerate(self.history, start=1)
+        ]
+        return "\n".join(lines)
+
 

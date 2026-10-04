@@ -41,12 +41,12 @@ class ScriptFileTest(unittest.TestCase):
             read_script(os.path.join(self.dir.name, "nope.emu"))
 
     def test_run_shows_input_and_output(self):
-        path = self.write("ls -l\nfoo\n")
+        path = self.write("ls nope\nfoo\n")
         shell = Shell()
         dialog = shell.run_script(path)
         self.assertEqual(dialog, [
-            shell.prompt() + "ls -l",
-            "ls: аргументы: ['-l']",
+            shell.prompt() + "ls nope",
+            "ls: нет такого файла или каталога: 'nope'",
             shell.prompt() + "foo",
             "foo: command not found",
         ])
@@ -68,7 +68,7 @@ class ScriptFileTest(unittest.TestCase):
         shell = Shell(Config(script_path=path))
         lines = shell.startup_output()
         self.assertIn(path, "\n".join(lines[:3]))
-        self.assertEqual(lines[-1], "ls: аргументы: []")
+        self.assertEqual(lines[-1], "home/")
 
 
 if __name__ == "__main__":

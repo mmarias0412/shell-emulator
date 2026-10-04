@@ -28,12 +28,12 @@ class ShellTest(unittest.TestCase):
         self.assertIn(self.shell.user, title)
         self.assertIn(self.shell.host, title)
 
-    def test_ls_stub(self):
-        out = self.shell.execute("ls -l /tmp")
-        self.assertEqual(out, "ls: аргументы: ['-l', '/tmp']")
+    def test_ls_default_vfs_shows_home(self):
+        self.assertEqual(self.shell.execute("ls"), "home/")
 
-    def test_cd_stub_without_args(self):
-        self.assertEqual(self.shell.execute("cd"), "cd: аргументы: []")
+    def test_cd_without_args_goes_home(self):
+        self.assertEqual(self.shell.execute("cd"), "")
+        self.assertEqual(self.shell.cwd, ["home"])
 
     def test_unknown_command(self):
         out = self.shell.execute("foo bar")
