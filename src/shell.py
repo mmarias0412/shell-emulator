@@ -8,8 +8,14 @@ from script import ScriptError, read_script
 from vfs import Vfs, VfsError, path_str
 
 CLEAR_SENTINEL = "\x00CLEAR\x00"
+<<<<<<< HEAD
 MAX_PATH_ARGS = 1
 CHOWN_ARGS = 2
+=======
+MAX_PATH_ARGS = 1      
+CHOWN_ARGS = 2 
+
+>>>>>>> 5b0ea04 (feat(commands): implement stage 5 — add chown and rmdir commands with test script)
 
 def _get_user():
     try:
@@ -39,6 +45,8 @@ class Shell:
             "clear": self._clear,
             "echo": self._echo,
             "history": self._history,
+            "chown": self._chown,
+            "rmdir": self._rmdir,
         }
     def _load_vfs(self):
         """Загружает VFS по пути из конфигурации, иначе — VFS по умолчанию."""
@@ -165,5 +173,30 @@ class Shell:
             for i, cmd in enumerate(self.history, start=1)
         ]
         return "\n".join(lines)
+    def _chown(self, name, args):
+        """Меняет владельца файла или каталога."""
+        if len(args) != CHOWN_ARGS:
+            return f"{name}: требуется два аргумента — владелец и путь"
+        owner, path = args
+        try:
+            self.vfs.chown(self.cwd, path, owner)
+        except VfsError as err:
+            return f"{name}: {err}"
+        return f"{name}: владелец '{path}' изменён на '{owner}'"
 
+    def _rmdir(self, name, args):
+        """Удаляет пустой каталог."""
+        if len(args) != MAX_PATH_ARGS:
+            return f"{name}: требуется один аргумент — путь"
+        path = args[0]
+        try:
+            target_segments, _ = self.vfs.resolve(self.cwd, path)
+            self.vfs.rmdir(self.cwd, path)
+        except VfsError as err:
+            return f"{name}: {err}"
+        
+        if target_segments == self.cwd:
+            self.cwd = self.cwd[:-1] if self.cwd else []
+        
+        return f"{name}: каталог '{path}' удалён"
 

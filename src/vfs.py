@@ -1,13 +1,15 @@
 """Виртуальная файловая система (VFS).
 
 Источник данных — CSV-файл. Каждая строка описывает один элемент VFS:
-путь от корня, тип ('file' или 'dir') и содержимое файла в base64
-(для каталогов поле содержимого пустое). Вложенность передаётся самим
-путём (например, '/docs/2024/report.txt'); промежуточные каталоги,
-не перечисленные отдельной строкой, создаются неявно. Все операции
-производятся только в памяти: чтение CSV строит дерево объектов,
-запись VFS на диск (vfs-save) сериализует текущее дерево обратно
-в тот же CSV-формат.
+путь от корня, тип ('file' или 'dir'), содержимое файла в base64
+(для каталогов поле содержимого пустое) и владелец. Вложенность
+передаётся самим путём (например, '/docs/2024/report.txt');
+промежуточные каталоги, не перечисленные отдельной строкой, создаются
+неявно. Колонка 'owner' необязательна: старые файлы с тремя колонками
+(path,type,content) по-прежнему читаются, владелец для них по
+умолчанию 'root'. Все операции производятся только в памяти: чтение
+CSV строит дерево объектов, запись VFS на диск (vfs-save) сериализует
+текущее дерево обратно в CSV (всегда с четырьмя колонками).
 """
 import base64
 import csv
@@ -15,6 +17,7 @@ import hashlib
 import io
 
 DEFAULT_NAME = "(в памяти)"
+DEFAULT_OWNER="root"
 
 
 class VfsError(Exception):
@@ -24,10 +27,11 @@ class VfsError(Exception):
 class VfsNode:
     """Узел VFS: файл или каталог."""
 
-    def __init__(self, name, is_dir, content=b""):
+    def __init__(self, name, is_dir, content=b"",owner=DEFAULT_OWNER):
         self.name = name
         self.is_dir = is_dir
         self.content = content
+        self.owner=owner
         self.children = {} if is_dir else None
 
     def ensure_dir(self, name):
@@ -40,11 +44,11 @@ class VfsNode:
             raise VfsError(f"'{name}' уже существует как файл")
         return child
 
-    def add_file(self, name, content):
+    def add_file(self, name, content,owner=DEFAULT_OWNER):
         """Добавляет файл; ошибка, если путь уже занят."""
         if name in self.children:
             raise VfsError(f"путь с именем '{name}' уже существует")
-        self.children[name] = VfsNode(name, is_dir=False, content=content)
+        self.children[name] = VfsNode(name, is_dir=False, content=content,owner=owner)
 
 
 def _split_path(path):
@@ -57,7 +61,9 @@ def path_str(segments):
 class Vfs:
     """Дерево VFS в памяти с загрузкой из CSV и сохранением обратно."""
 
-    COLUMNS = ["path", "type", "content"]
+    COLUMNS = ["path", "type", "content","owner"]
+    LEGACY_COLUMNS = ["path", "type", "content"]
+
 
     def __init__(self, name, root, source_bytes):
         self.name = name
@@ -95,21 +101,30 @@ class Vfs:
         except UnicodeDecodeError as err:
             raise VfsError(f"'{path}': неверная кодировка ({err})") from err
         reader = csv.DictReader(io.StringIO(text))
-        if reader.fieldnames != cls.COLUMNS:
+        
+        # Поддержка и старых (3 колонки), и новых (4 колонки) файлов
+        if reader.fieldnames == cls.LEGACY_COLUMNS:
+            columns = cls.LEGACY_COLUMNS
+        elif reader.fieldnames == cls.COLUMNS:
+            columns = cls.COLUMNS
+        else:
             raise VfsError(
-                f"'{path}': ожидались колонки {cls.COLUMNS}, "
+                f"'{path}': ожидались колонки {cls.COLUMNS} или {cls.LEGACY_COLUMNS}, "
                 f"получено {reader.fieldnames}"
             )
+    
         root = VfsNode("/", is_dir=True)
         for row_num, row in enumerate(reader, start=2):
-            cls._add_row(root, row, path, row_num)
+            cls._add_row(root, row, path, row_num, columns)
         return root
 
     @classmethod
-    def _add_row(cls, root, row, path, row_num):
+    def _add_row(cls, root, row, path, row_num, columns):
         raw_path = (row.get("path") or "").strip()
         kind = (row.get("type") or "").strip()
         content_field = row.get("content") or ""
+        # Для старых файлов owner берётся по умолчанию
+        owner = (row.get("owner") or "").strip() or DEFAULT_OWNER
         if not raw_path or raw_path == "/":
             return
         if kind not in ("file", "dir"):
@@ -123,14 +138,16 @@ class Vfs:
                 node = node.ensure_dir(part)
             leaf = segments[-1]
             if kind == "dir":
-                node.ensure_dir(leaf)
+                child = node.ensure_dir(leaf)
+                child.owner = owner
             else:
                 content = base64.b64decode(content_field, validate=True)
-                node.add_file(leaf, content)
+                node.add_file(leaf, content, owner)
         except (VfsError, ValueError) as err:
             raise VfsError(
                 f"'{path}': строка {row_num}: {err}"
             ) from err
+
 
     @classmethod
     def _serialize(cls, root):
@@ -142,7 +159,7 @@ class Vfs:
             content = "" if node.is_dir else base64.b64encode(
                 node.content
             ).decode("ascii")
-            writer.writerow([path, kind, content])
+            writer.writerow([path, kind, content,node.owner])
         return buf.getvalue().encode("utf-8")
 
     @classmethod
@@ -176,7 +193,37 @@ class Vfs:
                 raise VfsError(f"нет такого файла или каталога: '{path}'")
             node = node.children[part]
         return segments, node
+    def _normalize(self, cwd, path):
+        """Вычисляет сегменты пути с учётом '.', '..' и abs/relative."""
+        segments = [] if path.startswith("/") else list(cwd)
+        for part in _split_path(path):
+            if part == ".":
+                continue
+            if part == "..":
+                if segments:
+                    segments.pop()
+                continue
+            segments.append(part)
+        return segments
 
+    def _locate(self, cwd, path):
+        """Возвращает (родитель, имя, сегменты) узла по пути.
+
+        Для корня возвращает (None, None, []) - у него нет родителя.
+        Бросает VfsError, если путь (или его часть) не существует.
+        """
+        segments = self._normalize(cwd, path)
+        if not segments:
+            return None, None, []
+        parent = self.root
+        for part in segments[:-1]:
+            if not parent.is_dir or part not in parent.children:
+                raise VfsError(f"нет такого файла или каталога: '{path}'")
+            parent = parent.children[part]
+        leaf = segments[-1]
+        if not parent.is_dir or leaf not in parent.children:
+            raise VfsError(f"нет такого файла или каталога: '{path}'")
+        return parent, leaf, segments
 
     def save(self, path):
         """Сохраняет текущее (только в памяти изменённое) состояние
@@ -188,3 +235,22 @@ class Vfs:
         except OSError as err:
             raise VfsError(f"не удалось сохранить '{path}': {err}") from err
         self.source_bytes = data
+    def chown(self, cwd, path, owner):
+        """Меняет владельца файла или каталога по пути."""
+        parent, leaf, segments = self._locate(cwd, path)
+        node = self.root if parent is None else parent.children[leaf]
+        node.owner = owner
+        return segments
+
+    def rmdir(self, cwd, path):
+        """Удаляет пустой каталог по пути."""
+        parent, leaf, segments = self._locate(cwd, path)
+        if parent is None:
+            raise VfsError("нельзя удалить корневой каталог")
+        node = parent.children[leaf]
+        if not node.is_dir:
+            raise VfsError(f"не каталог: '{path}'")
+        if node.children:
+            raise VfsError(f"каталог не пуст: '{path}'")
+        del parent.children[leaf]
+        return segments

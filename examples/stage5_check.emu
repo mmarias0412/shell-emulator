@@ -1,0 +1,29 @@
+# Проверка команд этапа 5: chown, rmdir
+ls                            # корень: docs/  empty/  images/
+
+chown mary /images/logo.png   # смена владельца файла
+chown root /docs              # смена владельца каталога
+cd docs
+chown mary .                  # смена владельца текущего каталога (.)
+cd ..
+
+chown alice                   # ошибка: не хватает аргументов
+chown alice too many args     # ошибка: лишние аргументы
+chown mary /nope              # ошибка: такого пути нет
+
+rmdir /empty                  # успешно: каталог пустой
+ls                            # /empty больше нет в списке
+
+rmdir /docs                   # ошибка: каталог не пуст
+rmdir /images/logo.png        # ошибка: это файл, а не каталог
+rmdir /nope                   # ошибка: такого каталога нет
+rmdir /                       # ошибка: нельзя удалить корень
+rmdir                         # ошибка: не хватает аргумента
+rmdir a b                     # ошибка: лишний аргумент
+
+# После всех операций сохраняем изменённую VFS на диск -
+# в сохранённом файле будет видно /empty отсутствующим,
+# а владельцев /images/logo.png и /docs - изменившимися.
+vfs-save stage5_out.csv
+
+

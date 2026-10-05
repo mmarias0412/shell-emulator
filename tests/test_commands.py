@@ -24,7 +24,7 @@ class LsTest(unittest.TestCase):
 
     def test_ls_nested_vfs_lists_dirs_and_files(self):
         shell = Shell(Config(vfs_path=NESTED_VFS))
-        self.assertEqual(shell.execute("ls"), "docs/  images/")
+        self.assertEqual(shell.execute("ls"), "docs/  empty/  images/")
 
     def test_ls_absolute_path(self):
         shell = Shell(Config(vfs_path=NESTED_VFS))

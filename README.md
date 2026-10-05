@@ -3,8 +3,8 @@
 ## Общее описание
 
 Эмулятор командной строки UNIX-подобной ОС с графическим интерфейсом
-(tkinter). Реализованы этапы 1–4: REPL, конфигурация, виртуальная
-файловая система (VFS) и навигация по ней.
+(tkinter). Реализованы этапы 1–5: REPL, конфигурация, виртуальная
+файловая система (VFS), навигация по ней и команды управления файлами.
 
 ## Функции и настройки
 
@@ -20,6 +20,11 @@
 - `echo текст` — печатает аргументы через пробел.
 - `history` — нумерованный список всех введённых команд.
 - `clear` — очищает окно вывода.
+- `chown <владелец> <путь>` — меняет владельца файла или каталога.
+  Поддерживает относительные и абсолютные пути, включая `.`.
+- `rmdir <путь>` — удаляет пустой каталог. Нельзя удалить непустой
+  каталог, файл или корень `/`. Если удаляется текущий каталог,
+  `cwd` автоматически поднимается на уровень вверх.
 - `exit` — закрывает эмулятор.
 - Неизвестная команда: `<имя>: command not found`.
 - Пустой ввод игнорируется.
@@ -82,6 +87,11 @@
 
     ./scripts/test_stage4.sh    # Linux / macOS
     scripts\test_stage4.bat     # Windows
+
+Проверка команд этапа 5 (chown, rmdir) на разных VFS:
+
+    ./scripts/test_stage5.sh    # Linux / macOS
+    scripts\test_stage5.bat     # Windows
 
 Каждый вызов эмулятора в этих скриптах открывает окно; чтобы перейти к
 следующему запуску, закройте текущее окно (или дождитесь `exit`, если
@@ -158,15 +168,17 @@
 
 ### Этап 3. Работа с VFS
 
-Формат файла VFS — CSV с колонками `path`, `type`, `content`. Вложенность
-передаётся путём (например, `/docs/2024/report.txt`); промежуточные
-каталоги создаются неявно. Содержимое файлов хранится в base64.
+Формат файла VFS — CSV с колонками `path`, `type`, `content`, `owner`.
+Вложенность передаётся путём (например, `/docs/2024/report.txt`);
+промежуточные каталоги создаются неявно. Содержимое файлов хранится в
+base64. Колонка `owner` необязательна: старые файлы с тремя колонками
+по-прежнему читаются, владелец для них по умолчанию `root`.
 
 Пример (`data/vfs_minimal.csv`):
 
-    path,type,content
-    /home,dir,
-    /home/hello.txt,file,SGVsbG8=
+    path,type,content,owner
+    /home,dir,,root
+    /home/hello.txt,file,SGVsbG8=,root
 
 Запуск с файлом VFS и стартовым скриптом:
 
@@ -185,7 +197,7 @@
     user@host:~$ vfs-save output.csv
     vfs-save: сохранено в 'output.csv'
     user@host:~$ vfs-save
-    vfs-save: требуется один аргумент – путь
+    vfs-save: требуется один аргумент - путь
 
 Если файл VFS не найден или формат неверный, выводится ошибка и
 используется VFS по умолчанию:
@@ -234,20 +246,61 @@
     user@host:/$ history
      1  ls
      2  cd docs
-     3  cd 2024
-     4  ls
-     5  cd ..
-     6  cd ..
-     7  ls /docs/2024/notes
-     8  ls /images/logo.png
-     9  cd /nope
-    10  cd /images/logo.png
-    11  cd a b
-    12  echo Привет, виртуальная файловая система!
+     ...
     13  history
-    user@host:/$ clear
-    user@host:/$ echo после очистки
-    после очистки
 
-Команда `clear` очищает окно вывода, но не удаляет историю команд —
-`history` по-прежнему показывает все введённые команды.
+### Этап 5. Права доступа и управление каталогами
+
+Добавлены команды управления владельцами файлов и каталогами. Все
+изменения производятся только в памяти; для сохранения на диск
+используется команда `vfs-save`.
+
+Запуск с вложенной VFS:
+
+    python src/main.py --vfs data/vfs_nested.csv
+
+Вывод в окне эмулятора:
+
+    [debug] Параметры запуска:
+    [debug]   vfs    = data/vfs_nested.csv
+    [debug]   script = (не задан)
+    user@host:/$ ls
+    docs/  empty/  images/
+    user@host:/$ chown mary /images/logo.png
+    chown: '/images/logo.png' теперь принадлежит 'mary'
+    user@host:/$ chown root /docs
+    chown: '/docs' теперь принадлежит 'root'
+    user@host:/$ cd docs
+    user@host:/docs$ chown mary .
+    chown: '.' теперь принадлежит 'mary'
+    user@host:/docs$ cd ..
+    user@host:/$ chown alice
+    chown: требуется два аргумента — владелец и путь
+    user@host:/$ chown mary /nope
+    chown: нет такого файла или каталога: '/nope'
+    user@host:/$ rmdir /empty
+    rmdir: каталог '/empty' удалён
+    user@host:/$ ls
+    docs/  images/
+    user@host:/$ rmdir /docs
+    rmdir: каталог не пуст: '/docs'
+    user@host:/$ rmdir /images/logo.png
+    rmdir: не каталог: '/images/logo.png'
+    user@host:/$ rmdir /
+    rmdir: нельзя удалить корневой каталог
+    user@host:/$ rmdir
+    rmdir: требуется один аргумент — путь
+    user@host:/$ rmdir a b
+    rmdir: требуется один аргумент — путь
+    user@host:/$ vfs-save stage5_out.csv
+    vfs-save: сохранено в 'stage5_out.csv'
+
+В сохранённом файле `stage5_out.csv` будут видны изменения: папка
+`/empty` отсутствует, а владельцы `/images/logo.png` и `/docs`
+обновились.
+
+Запуск тестов этапа 5:
+
+    python -m unittest discover -s tests -v
+    ./scripts/test_stage5.sh    # Linux / macOS
+    scripts\test_stage5.bat     # Windows
