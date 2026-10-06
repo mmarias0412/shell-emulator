@@ -8,10 +8,7 @@ from script import ScriptError, read_script
 from vfs import Vfs, VfsError, path_str
 
 CLEAR_SENTINEL = "\x00CLEAR\x00"
-<<<<<<< HEAD
-MAX_PATH_ARGS = 1
-CHOWN_ARGS = 2
-=======
+
 MAX_PATH_ARGS = 1      
 CHOWN_ARGS = 2 
 def _get_user():
