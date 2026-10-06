@@ -14,9 +14,6 @@ CHOWN_ARGS = 2
 =======
 MAX_PATH_ARGS = 1      
 CHOWN_ARGS = 2 
-
->>>>>>> 5b0ea04 (feat(commands): implement stage 5 — add chown and rmdir commands with test script)
-
 def _get_user():
     try:
         return getpass.getuser()
