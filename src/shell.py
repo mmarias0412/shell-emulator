@@ -11,6 +11,7 @@ CLEAR_SENTINEL = "\x00CLEAR\x00"
 
 MAX_PATH_ARGS = 1      
 CHOWN_ARGS = 2 
+N_VALUE=1024
 def _get_user():
     try:
         return getpass.getuser()
@@ -121,76 +122,93 @@ class Shell:
             return str(size)
         value = float(size)
         for unit in ("B", "K", "M", "G", "T"):
-            if value < 1024 or unit == "T":
+            if value < N_VALUE or unit == "T":
                 if unit == "B":
                     return f"{int(value)}{unit}"
                 return f"{value:.1f}{unit}"
-            value /= 1024
+            value /= N_VALUE
         return f"{value:.1f}T"
 
     def _ls(self, name, args):
-        """Выводит содержимое каталога (текущего или указанного).
+        """Выводит содержимое каталога."""
+        flags = self._parse_ls_flags(args, name)
+        long_format, show_hidden, human, paths, err = flags
+        if err:
+            return err
+        if len(paths) > MAX_PATH_ARGS:
+            return f"{name}: слишком много аргументов"
+        path = paths[0] if paths else "."
+        try:
+            segments, node = self.vfs.resolve(self.cwd, path)
+        except VfsError as err:
+            return f"{name}: {err}"
+        if not node.is_dir:
+            return node.name
+        entries = self._filter_entries(node, show_hidden)
+        rows = self._build_rows(
+            segments, node, entries,
+            long_format, human, show_hidden
+        )
+        if long_format or show_hidden:
+            return "\n".join(rows)
+        return "  ".join(rows)
 
-        Поддерживает флаги (можно комбинировать в одном аргументе,
-        например '-la', '-ah', '-lah'):
-          -l  расширенный вывод: тип владелец размер имя
-          -a  показывать скрытые элементы (начинающиеся с '.'),
-              а также сами '.' и '..'
-          -h  при -l показывать размер в человекочитаемом виде
-              (K/M/G вместо байтов)
-        """
+    def _filter_entries(self, node, show_hidden):
+        """Фильтрует скрытые элементы, если нет флага -a."""
+        entries = sorted(node.children)
+        if show_hidden:
+            return entries
+        return [n for n in entries if not n.startswith(".")]
+
+    def _build_rows(
+        self, segments, node, entries,
+        long_format, human, show_hidden
+    ):
+        """Собирает строки вывода ls."""
+        rows = []
+        if show_hidden:
+            rows.append(self._format_ls_line(".", node, long_format, human))
+            try:
+                _, parent = self.vfs.resolve(segments, "..")
+                line = self._format_ls_line(
+                    "..", parent, long_format, human
+                )
+                rows.append(line)
+            except VfsError:
+                pass
+        rows += [
+            self._format_ls_line(n, node.children[n], long_format, human)
+            for n in entries
+        ]
+        return rows
+    @staticmethod
+    def _parse_ls_flags(args, name):
+        """Разбирает флаги ls (-l, -a, -h)."""
         flags = set()
         paths = []
         for arg in args:
             if arg.startswith("-") and arg != "-":
                 for ch in arg[1:]:
                     if ch not in "lah":
-                        return f"{name}: неизвестный флаг '-{ch}'"
+                        msg = f"{name}: неизвестный флаг '-{ch}'"
+                        return None, None, None, None, msg
                     flags.add(ch)
             else:
                 paths.append(arg)
+        return "l" in flags, "a" in flags, "h" in flags, paths, None
 
-        if len(paths) > MAX_PATH_ARGS:
-            return f"{name}: слишком много аргументов"
-
-        long_format = "l" in flags
-        show_hidden = "a" in flags
-        human = "h" in flags
-
-        path = paths[0] if paths else "."
-        try:
-            segments, node = self.vfs.resolve(self.cwd, path)
-        except VfsError as err:
-            return f"{name}: {err}"
-
-        if not node.is_dir:
-            return node.name
-
-        entries = sorted(node.children)
-        if not show_hidden:
-            entries = [n for n in entries if not n.startswith(".")]
-
-        def line_for(child_name, child):
-            if not long_format:
-                return child_name + ("/" if child.is_dir else "")
-            kind = "d" if child.is_dir else "-"
-            size = 0 if child.is_dir else len(child.content)
-            size_str = self._format_size(size, human)
-            display = child_name + ("/" if child.is_dir else "")
-            return f"{kind} {child.owner} {size_str} {display}"
-
-        rows = []
-        if show_hidden:
-            _, parent_node = self.vfs.resolve(segments, "..")
-            rows.append(line_for(".", node))
-            rows.append(line_for("..", parent_node))
-        rows += [line_for(n, node.children[n]) for n in entries]
-
-        if long_format or show_hidden:
-            return "\n".join(rows)
-        return "  ".join(rows)
+    @staticmethod
+    def _format_ls_line(child_name, child, long_format, human):
+        """Форматирует одну строку вывода ls."""
+        display = child_name + ("/" if child.is_dir else "")
+        if not long_format:
+            return display
+        kind = "d" if child.is_dir else "-"
+        size = 0 if child.is_dir else len(child.content)
+        size_str = Shell._format_size(size, human)
+        return f"{kind} {child.owner} {size_str} {display}"
     def _cd(self, name, args):
-        """Переходит в указанный каталог (или домашний, если нет аргумента)."""
+        """Переходит в указанный каталог (домашний, если нет аргумента)."""
         if len(args) > MAX_PATH_ARGS:
             return f"{name}: слишком много аргументов"
         if not args:
