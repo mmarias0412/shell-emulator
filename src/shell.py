@@ -114,24 +114,81 @@ class Shell:
         except VfsError as err:
             return f"vfs-save: {err}"
         return f"vfs-save: сохранено в '{args[0]}'"
+    @staticmethod  
+    def _format_size(size, human):
+        """Форматирует размер файла: обычное число или человекочитаемое."""
+        if not human:
+            return str(size)
+        value = float(size)
+        for unit in ("B", "K", "M", "G", "T"):
+            if value < 1024 or unit == "T":
+                if unit == "B":
+                    return f"{int(value)}{unit}"
+                return f"{value:.1f}{unit}"
+            value /= 1024
+        return f"{value:.1f}T"
+
     def _ls(self, name, args):
-        """Выводит содержимое каталога (текущего или указанного)."""
-        if len(args) > MAX_PATH_ARGS:
+        """Выводит содержимое каталога (текущего или указанного).
+
+        Поддерживает флаги (можно комбинировать в одном аргументе,
+        например '-la', '-ah', '-lah'):
+          -l  расширенный вывод: тип владелец размер имя
+          -a  показывать скрытые элементы (начинающиеся с '.'),
+              а также сами '.' и '..'
+          -h  при -l показывать размер в человекочитаемом виде
+              (K/M/G вместо байтов)
+        """
+        flags = set()
+        paths = []
+        for arg in args:
+            if arg.startswith("-") and arg != "-":
+                for ch in arg[1:]:
+                    if ch not in "lah":
+                        return f"{name}: неизвестный флаг '-{ch}'"
+                    flags.add(ch)
+            else:
+                paths.append(arg)
+
+        if len(paths) > MAX_PATH_ARGS:
             return f"{name}: слишком много аргументов"
-        path = args[0] if args else "."
+
+        long_format = "l" in flags
+        show_hidden = "a" in flags
+        human = "h" in flags
+
+        path = paths[0] if paths else "."
         try:
-            _, node = self.vfs.resolve(self.cwd, path)
+            segments, node = self.vfs.resolve(self.cwd, path)
         except VfsError as err:
             return f"{name}: {err}"
+
         if not node.is_dir:
             return node.name
-        entries = sorted(node.children)
-        names = [
-            child_name + ("/" if node.children[child_name].is_dir else "")
-            for child_name in entries
-        ]
-        return "  ".join(names)
 
+        entries = sorted(node.children)
+        if not show_hidden:
+            entries = [n for n in entries if not n.startswith(".")]
+
+        def line_for(child_name, child):
+            if not long_format:
+                return child_name + ("/" if child.is_dir else "")
+            kind = "d" if child.is_dir else "-"
+            size = 0 if child.is_dir else len(child.content)
+            size_str = self._format_size(size, human)
+            display = child_name + ("/" if child.is_dir else "")
+            return f"{kind} {child.owner} {size_str} {display}"
+
+        rows = []
+        if show_hidden:
+            _, parent_node = self.vfs.resolve(segments, "..")
+            rows.append(line_for(".", node))
+            rows.append(line_for("..", parent_node))
+        rows += [line_for(n, node.children[n]) for n in entries]
+
+        if long_format or show_hidden:
+            return "\n".join(rows)
+        return "  ".join(rows)
     def _cd(self, name, args):
         """Переходит в указанный каталог (или домашний, если нет аргумента)."""
         if len(args) > MAX_PATH_ARGS:

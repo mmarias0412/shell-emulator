@@ -17,7 +17,7 @@ import hashlib
 import io
 
 DEFAULT_NAME = "(в памяти)"
-DEFAULT_OWNER="root"
+DEFAULT_OWNER="маша"
 
 
 class VfsError(Exception):
@@ -48,7 +48,12 @@ class VfsNode:
         """Добавляет файл; ошибка, если путь уже занят."""
         if name in self.children:
             raise VfsError(f"путь с именем '{name}' уже существует")
-        self.children[name] = VfsNode(name, is_dir=False, content=content,owner=owner)
+        self.children[name] = VfsNode(
+        name,
+        is_dir=False,
+        content=content,
+        owner=owner
+        )
 
 
 def _split_path(path):
@@ -61,8 +66,8 @@ def path_str(segments):
 class Vfs:
     """Дерево VFS в памяти с загрузкой из CSV и сохранением обратно."""
 
-    COLUMNS = ["path", "type", "content","owner"]
-    LEGACY_COLUMNS = ["path", "type", "content"]
+    columns = ["path", "type", "content","owner"]
+    legacy_columns = ["path", "type", "content"]
 
 
     def __init__(self, name, root, source_bytes):
@@ -102,14 +107,14 @@ class Vfs:
             raise VfsError(f"'{path}': неверная кодировка ({err})") from err
         reader = csv.DictReader(io.StringIO(text))
         
-        # Поддержка и старых (3 колонки), и новых (4 колонки) файлов
-        if reader.fieldnames == cls.LEGACY_COLUMNS:
-            columns = cls.LEGACY_COLUMNS
-        elif reader.fieldnames == cls.COLUMNS:
-            columns = cls.COLUMNS
+        if reader.fieldnames == cls.legacy_columns:
+            columns = cls.legacy_columns
+        elif reader.fieldnames == cls.columns:
+            columns = cls.columns
         else:
             raise VfsError(
-                f"'{path}': ожидались колонки {cls.COLUMNS} или {cls.LEGACY_COLUMNS}, "
+                f"'{path}':,"
+                f" ожидались колонки {cls.columns} или {cls.legacy_columns}, "
                 f"получено {reader.fieldnames}"
             )
     
@@ -123,37 +128,44 @@ class Vfs:
         raw_path = (row.get("path") or "").strip()
         kind = (row.get("type") or "").strip()
         content_field = row.get("content") or ""
-        # Для старых файлов owner берётся по умолчанию
         owner = (row.get("owner") or "").strip() or DEFAULT_OWNER
+
         if not raw_path or raw_path == "/":
             return
+
+        cls._validate_kind(path, row_num, kind)
+
+        segments = _split_path(raw_path)
+        try:
+            cls._insert_node(root, segments, kind, content_field, owner)
+        except (VfsError, ValueError) as err:
+            raise VfsError(f"'{path}': строка {row_num}: {err}") from err
+
+    @classmethod
+    def _validate_kind(cls, path, row_num, kind):
         if kind not in ("file", "dir"):
             raise VfsError(
                 f"'{path}': строка {row_num}: неверный type '{kind}'"
             )
-        segments = _split_path(raw_path)
-        try:
-            node = root
-            for part in segments[:-1]:
-                node = node.ensure_dir(part)
-            leaf = segments[-1]
-            if kind == "dir":
-                child = node.ensure_dir(leaf)
-                child.owner = owner
-            else:
-                content = base64.b64decode(content_field, validate=True)
-                node.add_file(leaf, content, owner)
-        except (VfsError, ValueError) as err:
-            raise VfsError(
-                f"'{path}': строка {row_num}: {err}"
-            ) from err
 
+    @classmethod
+    def _insert_node(cls, root, segments, kind, content_field, owner):
+        node = root
+        for part in segments[:-1]:
+            node = node.ensure_dir(part)
 
+        leaf = segments[-1]
+        if kind == "dir":
+            child = node.ensure_dir(leaf)
+            child.owner = owner
+        else:
+            content = base64.b64decode(content_field, validate=True)
+            node.add_file(leaf, content, owner)
     @classmethod
     def _serialize(cls, root):
         buf = io.StringIO()
         writer = csv.writer(buf, lineterminator="\n")
-        writer.writerow(cls.COLUMNS)
+        writer.writerow(cls.columns)
         for path, node in cls._walk(root, ""):
             kind = "dir" if node.is_dir else "file"
             content = "" if node.is_dir else base64.b64encode(
